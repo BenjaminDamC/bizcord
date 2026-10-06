@@ -1,0 +1,26 @@
+# Build output
+bin/
+obj/
+[Oo]ut/
+[Dd]ebug/
+[Rr]elease/
+
+# .NET / NuGet
+*.user
+*.suo
+project.lock.json
+*.nupkg
+*.snupkg
+packages/
+
+# IDE
+.idea/
+.vs/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
