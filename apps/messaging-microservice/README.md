@@ -22,7 +22,7 @@ dotnet run
 
 ## Layout
 
-- `Domain/` — internal entities (Channel, Message, Reaction, ReadState)
+- `Domain/` — internal entities (Channel, Message, Reaction, ReadState, ChannelMember)
 - `Contracts/` — the shared model: DTOs other services integrate with, hiding internal fields
 - `Data/` — in-memory repositories
 - `Messaging/` — the EasyNetQ message client (`IMessageClient`)
@@ -34,6 +34,13 @@ dotnet run
 - `POST /channels`
 - `GET /channels/{channelId}/messages`
 - `POST /channels/{channelId}/messages` — persists the message and publishes a `MessageCreated` event
+- `GET /channels/{channelId}/members`
+- `POST /channels/{channelId}/members`
+- `PATCH /channels/{channelId}/members/{userId}/role`
+
+Members are a good example of the shared-model idea: internally a `ChannelMember`
+keeps the role, per-channel permission overrides, and an audit log of role changes,
+but the API only exposes `userId`, `roleType` and the resolved `permissions`.
 
 ## Message client
 
