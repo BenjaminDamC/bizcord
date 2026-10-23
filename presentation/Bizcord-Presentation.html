@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Bizcord — Messaging Microservice</title>
+<style>
+@page { size: A4; margin: 12mm 10mm; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  color: #1e293b; font-size: 11px; line-height: 1.55; margin: 0;
+  -webkit-print-color-adjust: exact; print-color-adjust: exact;
+}
+h1 { font-size: 30px; margin: 0 0 6px; color: #1e293b; }
+h2 {
+  font-size: 19px; color: #4f46e5; border-bottom: 2px solid #4f46e5;
+  padding-bottom: 6px; margin: 0 0 10px;
+}
+p { margin: 6px 0; }
+code {
+  font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 10px;
+  background: #f1f5f9; padding: 1px 4px; border-radius: 3px; color: #0f172a;
+}
+table { border-collapse: collapse; width: 100%; margin: 8px 0 12px; }
+th, td { border: 1px solid #cbd5e1; padding: 5px 8px; text-align: left; vertical-align: top; }
+th { background: #eef2ff; color: #312e81; }
+td.hl { background: #f0f9ff; }
+.code {
+  margin: 8px 0 10px; border: 1px solid #e2e8f0; border-radius: 6px; overflow: hidden;
+}
+.code-head {
+  background: #0f172a; color: #e2e8f0; font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 9px; padding: 3px 10px;
+}
+.code pre {
+  margin: 0; padding: 8px 10px; background: #f8fafc;
+  font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 8.5px; line-height: 1.5;
+  white-space: pre-wrap; word-wrap: break-word;
+}
+.k { color: #7c3aed; font-weight: 600; }
+.s { color: #b45309; }
+.c { color: #64748b; font-style: italic; }
+.n { color: #0f766e; }
+.callout {
+  background: #eef2ff; border-left: 4px solid #4f46e5; padding: 8px 12px;
+  margin: 10px 0; border-radius: 0 6px 6px 0;
+}
+ul { margin: 6px 0; padding-left: 20px; }
+li { margin: 4px 0; }
+.cover { text-align: left; padding: 90px 10px 0; }
+.cover-badge { color: #4f46e5; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; font-size: 12px; }
+.cover h1 { font-size: 42px; margin-top: 18px; }
+.cover-sub { font-size: 16px; color: #475569; margin: 10px 0 22px; }
+.cover-meta { font-size: 13px; color: #334155; max-width: 520px; line-height: 1.7; }
+.cover-foot { margin-top: 70px; font-size: 13px; color: #64748b; border-top: 1px solid #e2e8f0; padding-top: 12px; }
+.diagram { margin: 12px 0; }
+.pagebreak { page-break-after: always; }
+</style></head>
+<body>
+
+<div class="cover">
+  <div class="cover-badge">EASV · System Integration (E2026)</div>
+  <h1>Bizcord — Messaging Microservice</h1>
+  <div class="cover-sub">Compulsory Assignment #1 · Weeks 36–40</div>
+  <div class="cover-meta">
+    A Slack/Discord-style business-communication platform, split into
+    independently deployable microservices that talk over REST and RabbitMQ.
+    This deck walks through all five tasks and the C#/.NET code behind them.
+  </div>
+  <div class="cover-foot">Benjamin Dam Christensen</div>
+</div>
+<div class="pagebreak"></div>
+
+<h2>What this assignment asked for</h2>
+<p>
+Bizcord is decomposed into <strong>eight microservices</strong>, each owning one
+bounded context. The assignment is to finalize the weekly labs from W36–W40 for
+<strong>one</strong> service — the Messaging service — and document the analysis
+&amp; design in a <code>docs/</code> folder. Submission is a single repository link.
+</p>
+<table>
+  <tr><th>Task</th><th>Week</th><th>Deliverable in this repo</th></tr>
+  <tr><td>1. Analysis &amp; Design</td><td>W36</td><td><code>docs/architecture.md</code>, <code>docs/interactions.md</code></td></tr>
+  <tr><td>2. Setup &amp; Messaging</td><td>W37</td><td>Microservice in the monorepo + EasyNetQ message client</td></tr>
+  <tr><td>3. Inter-service communication</td><td>W38</td><td>Domain model, shared model, REST API</td></tr>
+  <tr><td>4. Deployment</td><td>W39</td><td><code>Dockerfile</code> + <code>docker-compose.yml</code></td></tr>
+  <tr><td>5. First feature &amp; testing</td><td>W40</td><td>Channel membership feature + xUnit tests</td></tr>
+</table>
+<div class="callout"><strong>Stack:</strong> .NET 9 (ASP.NET Core minimal API) · RabbitMQ via EasyNetQ ·
+in-memory repositories · Docker · xUnit</div>
+
+<div class="pagebreak"></div>
+<h2>Task 1 — Analysis &amp; Design</h2>
+<p>
+The platform splits into bounded contexts along <em>“one reason to change”</em>:
+auth changes for security reasons, messaging for product features, billing for
+pricing — so they become separate services. Two of them are <strong>derived</strong>
+services (Presence, Search): they mirror data owned elsewhere and consume events
+instead of owning the source of truth.
+</p>
+<table>
+  <tr><th>Service</th><th>Responsibility</th><th>Owns (data)</th></tr>
+  <tr><td>Identity &amp; Access</td><td>accounts, SSO, profiles, sessions</td><td>users, credentials, sessions</td></tr>
+  <tr><td>Organisation &amp; Membership</td><td>workspaces, members, roles, invites</td><td>organisations, memberships, roles</td></tr>
+  <tr><td class="hl">Messaging</td><td class="hl">channels, threads, DMs, reactions, read-state</td><td class="hl">channels, messages, reactions</td></tr>
+  <tr><td>Presence</td><td>online/away status, typing</td><td>presence state</td></tr>
+  <tr><td>Notifications</td><td>in-app, email, push delivery</td><td>preferences, delivery state</td></tr>
+  <tr><td>Files &amp; Media</td><td>store/serve uploads</td><td>file metadata, blobs</td></tr>
+  <tr><td>Search</td><td>full-text index</td><td>search index <em>(derived)</em></td></tr>
+  <tr><td>Billing &amp; Subscriptions</td><td>plans, payments, invoices</td><td>subscriptions, payments, invoices</td></tr>
+</table>
+<div class="callout"><strong>Boundary rule:</strong> services never write to another
+service’s store directly — they call its API or consume its events. Search is the
+clearest case: it keeps a read-only copy of messages, rebuilt from events, while
+Messaging stays the single source of truth.</div>
+
+<div class="pagebreak"></div>
+<h2>Task 2 — Setup &amp; the message client</h2>
+<p>
+The service lives in a monorepo (<code>apps/messaging-microservice</code>) and
+talks to RabbitMQ through a thin abstraction. The rest of the service depends on
+<code>IMessageClient</code> — not EasyNetQ directly — so the broker could be swapped
+without touching domain code.
+</p>
+<div class="code"><div class="code-head">src/MessagingService/Messaging/IMessageClient.cs</div><pre><span class="k">namespace</span> MessagingService.Messaging;
+
+<span class="c">/// &lt;summary&gt;</span>
+<span class="c">/// Thin publish/subscribe abstraction over the message broker. The rest of the</span>
+<span class="c">/// service depends on this instead of EasyNetQ directly, so the broker can be</span>
+<span class="c">/// swapped without touching the domain code.</span>
+<span class="c">/// &lt;/summary&gt;</span>
+<span class="k">public</span> <span class="k">interface</span> IMessageClient
+{
+    Task PublishAsync&lt;T&gt;(T message) <span class="k">where</span> T : <span class="k">class</span>;
+    Task SubscribeAsync&lt;T&gt;(<span class="k">string</span> subscriptionId, Func&lt;T, Task&gt; handler) <span class="k">where</span> T : <span class="k">class</span>;
+}</pre></div><div class="code"><div class="code-head">src/MessagingService/Messaging/MessageClient.cs</div><pre><span class="k">using</span> EasyNetQ;
+
+<span class="k">namespace</span> MessagingService.Messaging;
+
+<span class="c">/// &lt;summary&gt;</span>
+<span class="c">/// EasyNetQ-backed implementation of &lt;see cref=&quot;IMessageClient&quot;/&gt;.</span>
+<span class="c">/// &lt;/summary&gt;</span>
+<span class="k">public</span> <span class="k">class</span> MessageClient : IMessageClient
+{
+    <span class="k">private</span> <span class="k">readonly</span> IBus _bus;
+
+    <span class="k">public</span> MessageClient(IBus bus) =&gt; _bus = bus;
+
+    <span class="k">public</span> Task PublishAsync&lt;T&gt;(T message) <span class="k">where</span> T : <span class="k">class</span>
+        =&gt; _bus.PubSub.PublishAsync(message);
+
+    <span class="k">public</span> Task SubscribeAsync&lt;T&gt;(<span class="k">string</span> subscriptionId, Func&lt;T, Task&gt; handler) <span class="k">where</span> T : <span class="k">class</span>
+        =&gt; _bus.PubSub.SubscribeAsync(subscriptionId, handler);
+}</pre></div>
+<p>Wiring in <code>Program.cs</code> — EasyNetQ reads the connection string, and the
+repositories/message client are registered for dependency injection:</p>
+<div class="code"><div class="code-head">src/MessagingService/Program.cs (lines 19–27)</div><pre><span class="c">// RabbitMQ (EasyNetQ) + the message client wrapper.</span>
+<span class="k">var</span> rabbitMq = builder.Configuration.GetConnectionString(<span class="s">&quot;RabbitMQ&quot;</span>) ?? <span class="s">&quot;host=localhost&quot;</span>;
+builder.Services.AddEasyNetQ(rabbitMq);
+builder.Services.AddSingleton&lt;IMessageClient, MessageClient&gt;();
+
+<span class="c">// In-memory persistence (swap for a real store later).</span>
+builder.Services.AddSingleton&lt;IChannelRepository, InMemoryChannelRepository&gt;();
+builder.Services.AddSingleton&lt;IMessageRepository, InMemoryMessageRepository&gt;();
+builder.Services.AddSingleton&lt;IChannelMemberRepository, InMemoryChannelMemberRepository&gt;();</pre></div>
+<div class="pagebreak"></div>
+<h2>Task 3 — Domain model (internal entities)</h2>
+<p>
+The domain entities are the <strong>internal</strong> truth — richer than what other
+services need. <code>ChannelMember</code>, for example, keeps the role, per-channel
+permission overrides <em>and</em> an audit log of every role change.
+</p>
+<div class="code"><div class="code-head">src/MessagingService/Domain/Channel.cs</div><pre><span class="k">namespace</span> MessagingService.Domain;
+
+<span class="c">/// &lt;summary&gt;</span>
+<span class="c">/// A channel (or direct-message thread) in a workspace. This is the full internal</span>
+<span class="c">/// entity — the shared model (Contracts) exposes only a subset of these fields.</span>
+<span class="c">/// &lt;/summary&gt;</span>
+<span class="k">public</span> <span class="k">class</span> Channel
+{
+    <span class="k">public</span> Guid Id { <span class="k">get</span>; <span class="k">init</span>; } = Guid.NewGuid();
+    <span class="k">public</span> Guid WorkspaceId { <span class="k">get</span>; <span class="k">init</span>; }
+    <span class="k">public</span> <span class="k">string</span> Name { <span class="k">get</span>; <span class="k">set</span>; } = <span class="s">&quot;&quot;</span>;
+    <span class="k">public</span> <span class="k">string</span> Description { <span class="k">get</span>; <span class="k">set</span>; } = <span class="s">&quot;&quot;</span>;
+    <span class="k">public</span> <span class="k">bool</span> IsDirectMessage { <span class="k">get</span>; <span class="k">init</span>; }
+    <span class="k">public</span> DateTimeOffset CreatedAt { <span class="k">get</span>; <span class="k">init</span>; } = DateTimeOffset.UtcNow;
+}</pre></div><div class="code"><div class="code-head">src/MessagingService/Domain/Message.cs</div><pre><span class="k">namespace</span> MessagingService.Domain;
+
+<span class="k">public</span> <span class="k">class</span> Message
+{
+    <span class="k">public</span> Guid Id { <span class="k">get</span>; <span class="k">init</span>; } = Guid.NewGuid();
+    <span class="k">public</span> Guid ChannelId { <span class="k">get</span>; <span class="k">init</span>; }
+    <span class="k">public</span> Guid AuthorId { <span class="k">get</span>; <span class="k">init</span>; }
+    <span class="k">public</span> <span class="k">string</span> Content { <span class="k">get</span>; <span class="k">set</span>; } = <span class="s">&quot;&quot;</span>;
+    <span class="k">public</span> DateTimeOffset CreatedAt { <span class="k">get</span>; <span class="k">init</span>; } = DateTimeOffset.UtcNow;
+    <span class="k">public</span> DateTimeOffset? EditedAt { <span class="k">get</span>; <span class="k">set</span>; }
+}</pre></div><div class="code"><div class="code-head">src/MessagingService/Domain/ChannelMember.cs (excerpt)</div><pre><span class="k">public</span> <span class="k">class</span> ChannelMember
+{
+    <span class="k">public</span> Guid Id { <span class="k">get</span>; <span class="k">init</span>; } = Guid.NewGuid();
+    <span class="k">public</span> Guid ChannelId { <span class="k">get</span>; <span class="k">init</span>; }
+    <span class="k">public</span> Guid UserId { <span class="k">get</span>; <span class="k">init</span>; }
+    <span class="k">public</span> ChannelRole Role { <span class="k">get</span>; <span class="k">private</span> <span class="k">set</span>; }
+
+    <span class="c">// Internal: per-channel overrides on top of the role&#x27;s defaults.</span>
+    <span class="k">public</span> List&lt;PermissionOverride&gt; Overrides { <span class="k">get</span>; } = [];
+
+    <span class="c">// Internal: audit log of every role change.</span>
+    <span class="k">public</span> List&lt;RoleChange&gt; RoleHistory { <span class="k">get</span>; } = [];
+
+    <span class="k">public</span> ChannelMember(Guid channelId, Guid userId, ChannelRole role = ChannelRole.Member)
+    {
+        ChannelId = channelId;
+        UserId = userId;
+        Role = role;
+    }
+
+    <span class="k">public</span> <span class="k">void</span> ChangeRole(ChannelRole newRole, Guid changedBy)
+    {
+        <span class="k">if</span> (newRole == Role)
+        {
+            <span class="k">return</span>;
+        }
+
+        RoleHistory.Add(<span class="k">new</span> RoleChange(Role, newRole, changedBy, DateTimeOffset.UtcNow));
+        Role = newRole;
+    }</pre></div>
+<div class="pagebreak"></div>
+<h2>Task 3 — Shared model (the contract others integrate with)</h2>
+<p>
+The <code>Contracts/</code> records are the <strong>narrow</strong> surface other
+services see. A <code>ChannelMember</code> has overrides and a role history
+internally, but the API only exposes <code>userId</code>, <code>roleType</code> and the
+<em>resolved</em> permissions.
+</p>
+<div class="code"><div class="code-head">src/MessagingService/Contracts/ChannelMemberDto.cs</div><pre><span class="k">namespace</span> MessagingService.Contracts;
+
+<span class="c">/// &lt;summary&gt;</span>
+<span class="c">/// Shared model for a channel membership. Other services only need to know who is</span>
+<span class="c">/// in a channel, their role, and what they can do — not the override list or the</span>
+<span class="c">/// audit log the domain keeps internally.</span>
+<span class="c">/// &lt;/summary&gt;</span>
+<span class="k">public</span> <span class="k">record</span> ChannelMemberDto(Guid UserId, ChannelRoleType RoleType, ChannelPermissions Permissions);
+
+<span class="k">public</span> <span class="k">enum</span> ChannelRoleType
+{
+    Member,
+    Moderator,
+    Admin
+}
+
+<span class="k">public</span> <span class="k">record</span> ChannelPermissions(<span class="k">bool</span> CanPost, <span class="k">bool</span> CanInvite, <span class="k">bool</span> CanManageChannels);
+
+<span class="k">public</span> <span class="k">record</span> CreateChannelMemberRequest(Guid UserId, ChannelRoleType RoleType);
+
+<span class="k">public</span> <span class="k">record</span> UpdateMemberRoleRequest(ChannelRoleType RoleType, Guid ChangedBy);</pre></div><div class="code"><div class="code-head">src/MessagingService/Contracts/ChannelDto.cs</div><pre><span class="k">namespace</span> MessagingService.Contracts;
+
+<span class="c">/// &lt;summary&gt;</span>
+<span class="c">/// Shared model for a channel — only the fields other services need to integrate</span>
+<span class="c">/// with. Internal details (workspace id, DM flag) stay in the domain entity.</span>
+<span class="c">/// &lt;/summary&gt;</span>
+<span class="k">public</span> <span class="k">record</span> ChannelDto(Guid Id, <span class="k">string</span> Name, <span class="k">string</span> Description, DateTimeOffset CreatedAt);
+
+<span class="k">public</span> <span class="k">record</span> CreateChannelRequest(<span class="k">string</span> Name, <span class="k">string</span> Description);</pre></div><div class="code"><div class="code-head">src/MessagingService/Contracts/MessageDto.cs</div><pre><span class="k">namespace</span> MessagingService.Contracts;
+
+<span class="k">public</span> <span class="k">record</span> MessageDto(Guid Id, Guid ChannelId, Guid AuthorId, <span class="k">string</span> Content, DateTimeOffset CreatedAt);
+
+<span class="k">public</span> <span class="k">record</span> CreateMessageRequest(Guid AuthorId, <span class="k">string</span> Content);</pre></div>
+<p>The mapping from domain → shared model lives on the entity itself, so the
+resolution logic (role defaults + overrides) stays in one place:</p>
+<div class="code"><div class="code-head">src/MessagingService/Domain/ChannelMember.cs — EffectivePermissions + ToDto</div><pre>    <span class="k">public</span> ChannelPermissions EffectivePermissions()
+    {
+        <span class="k">var</span> permissions = Role <span class="k">switch</span>
+        {
+            ChannelRole.Admin =&gt; <span class="k">new</span> ChannelPermissions(<span class="k">true</span>, <span class="k">true</span>, <span class="k">true</span>),
+            ChannelRole.Moderator =&gt; <span class="k">new</span> ChannelPermissions(<span class="k">true</span>, <span class="k">true</span>, <span class="k">false</span>),
+            _ =&gt; <span class="k">new</span> ChannelPermissions(<span class="k">true</span>, <span class="k">false</span>, <span class="k">false</span>),
+        };
+
+        <span class="k">foreach</span> (<span class="k">var</span> o <span class="k">in</span> Overrides)
+        {
+            permissions = o.Permission <span class="k">switch</span>
+            {
+                <span class="k">nameof</span>(ChannelPermissions.CanPost) =&gt; permissions <span class="k">with</span> { CanPost = o.Allowed },
+                <span class="k">nameof</span>(ChannelPermissions.CanInvite) =&gt; permissions <span class="k">with</span> { CanInvite = o.Allowed },
+                <span class="k">nameof</span>(ChannelPermissions.CanManageChannels) =&gt; permissions <span class="k">with</span> { CanManageChannels = o.Allowed },
+                _ =&gt; permissions,
+            };
+        }
+
+        <span class="k">return</span> permissions;
+    }
+
+    <span class="k">public</span> ChannelMemberDto ToDto()
+    {
+        <span class="k">var</span> roleType = Role <span class="k">switch</span>
+        {
+            ChannelRole.Admin =&gt; ChannelRoleType.Admin,
+            ChannelRole.Moderator =&gt; ChannelRoleType.Moderator,
+            _ =&gt; ChannelRoleType.Member,
+        };
+
+        <span class="k">return</span> <span class="k">new</span> ChannelMemberDto(UserId, roleType, EffectivePermissions());
+    }</pre></div>
+<div class="pagebreak"></div>
+<h2>Task 3 — REST API (sync) + events (async)</h2>
+<p>
+The minimal API exposes channels, messages and members. The interesting part is
+the <code>POST</code> on messages: it <strong>persists + replies synchronously</strong>, then
+<strong>publishes a <code>MessageCreated</code> event</strong> so Notifications/Search can
+react without the caller waiting.
+</p>
+<div class="code"><div class="code-head">src/MessagingService/Program.cs — channels &amp; messages endpoints</div><pre><span class="c">// --- Channels ---</span>
+
+app.MapGet(<span class="s">&quot;/channels&quot;</span>, <span class="k">async</span> (IChannelRepository channels) =&gt;
+{
+    <span class="k">var</span> all = <span class="k">await</span> channels.GetAllAsync();
+    <span class="k">return</span> Results.Ok(all.Select(c =&gt; <span class="k">new</span> ChannelDto(c.Id, c.Name, c.Description, c.CreatedAt)));
+});
+
+app.MapGet(<span class="s">&quot;/channels/{id:guid}&quot;</span>, <span class="k">async</span> (Guid id, IChannelRepository channels) =&gt;
+{
+    <span class="k">var</span> channel = <span class="k">await</span> channels.GetByIdAsync(id);
+    <span class="k">return</span> channel <span class="k">is</span> <span class="k">null</span>
+        ? Results.NotFound()
+        : Results.Ok(<span class="k">new</span> ChannelDto(channel.Id, channel.Name, channel.Description, channel.CreatedAt));
+});
+
+app.MapPost(<span class="s">&quot;/channels&quot;</span>, <span class="k">async</span> (CreateChannelRequest request, IChannelRepository channels) =&gt;
+{
+    <span class="k">var</span> channel = <span class="k">new</span> Channel { Name = request.Name, Description = request.Description };
+    <span class="k">await</span> channels.AddAsync(channel);
+    <span class="k">return</span> Results.Created($<span class="s">&quot;/channels/{channel.Id}&quot;</span>, <span class="k">new</span> ChannelDto(channel.Id, channel.Name, channel.Description, channel.CreatedAt));
+});
+
+<span class="c">// --- Messages ---</span>
+
+app.MapGet(<span class="s">&quot;/channels/{channelId:guid}/messages&quot;</span>, <span class="k">async</span> (Guid channelId, IMessageRepository messages) =&gt;
+{
+    <span class="k">var</span> result = <span class="k">await</span> messages.GetByChannelAsync(channelId);
+    <span class="k">return</span> Results.Ok(result.Select(m =&gt; <span class="k">new</span> MessageDto(m.Id, m.ChannelId, m.AuthorId, m.Content, m.CreatedAt)));
+});
+
+app.MapPost(<span class="s">&quot;/channels/{channelId:guid}/messages&quot;</span>, <span class="k">async</span> (
+    Guid channelId,
+    CreateMessageRequest request,
+    IMessageRepository messages,
+    IMessageClient client) =&gt;
+{
+    <span class="k">var</span> message = <span class="k">new</span> Message { ChannelId = channelId, AuthorId = request.AuthorId, Content = request.Content };
+    <span class="k">await</span> messages.AddAsync(message);
+
+    <span class="c">// REST complements messaging: persist + reply synchronously, but also publish</span>
+    <span class="c">// an event so Notifications/Search can react without the caller waiting.</span>
+    <span class="k">await</span> client.PublishAsync(<span class="k">new</span> MessageCreated(message.Id, message.ChannelId, message.AuthorId, message.Content, message.CreatedAt));
+
+    <span class="k">return</span> Results.Created(
+        $<span class="s">&quot;/channels/{channelId}/messages/{message.Id}&quot;</span>,
+        <span class="k">new</span> MessageDto(message.Id, message.ChannelId, message.AuthorId, message.Content, message.CreatedAt));
+});</pre></div><div class="code"><div class="code-head">src/MessagingService/Messages/MessageCreated.cs</div><pre><span class="k">namespace</span> MessagingService.Messages;
+
+<span class="c">/// &lt;summary&gt;</span>
+<span class="c">/// Published when a user posts a message. Downstream services (Notifications,</span>
+<span class="c">/// Search) subscribe to this so the sender never waits on them.</span>
+<span class="c">/// &lt;/summary&gt;</span>
+<span class="k">public</span> <span class="k">record</span> MessageCreated(
+    Guid MessageId,
+    Guid ChannelId,
+    Guid AuthorId,
+    <span class="k">string</span> Content,
+    DateTimeOffset CreatedAt);</pre></div>
+<div class="callout"><strong>Why both?</strong> REST (request/response) when the
+caller needs an answer now; events (fire-and-forget) when the work can happen later.
+This keeps the core Messaging path fast — it publishes and moves on instead of
+waiting for every downstream service.</div>
+
+<div class="pagebreak"></div>
+<h2>Task 4 — Deployment</h2>
+<p>
+A multi-stage <code>Dockerfile</code> builds in the SDK image and runs in the tiny
+<code>aspnet</code> runtime image. <code>docker-compose</code> then wires RabbitMQ and the
+service together with a healthcheck so the service only starts once the broker is up.
+</p>
+<div class="code"><div class="code-head">Dockerfile</div><pre># Build stage
+FROM mcr.microsoft.com/dotnet/sdk:<span class="n">9.0</span> AS build
+WORKDIR /src
+
+COPY src/MessagingService/MessagingService.csproj src/MessagingService/
+RUN dotnet restore src/MessagingService/MessagingService.csproj
+
+COPY src/MessagingService/ src/MessagingService/
+RUN dotnet publish src/MessagingService/MessagingService.csproj -c Release -o /app/publish
+
+# Runtime stage
+FROM mcr.microsoft.com/dotnet/aspnet:<span class="n">9.0</span> AS runtime
+WORKDIR /app
+COPY --from=build /app/publish .
+EXPOSE <span class="n">8080</span>
+ENTRYPOINT [<span class="s">&quot;dotnet&quot;</span>, <span class="s">&quot;MessagingService.dll&quot;</span>]</pre></div><div class="code"><div class="code-head">docker-compose.yml</div><pre># Bizcord messaging microservice + RabbitMQ.
+# Task <span class="n">4</span> — Deployment: Dockerfile + docker-compose.
+services:
+  rabbitmq:
+    image: rabbitmq:<span class="n">3</span>-management
+    ports:
+      - <span class="s">&quot;5672:5672&quot;</span>    # AMQP
+      - <span class="s">&quot;15672:15672&quot;</span>  # management UI (guest/guest)
+    healthcheck:
+      test: [<span class="s">&quot;CMD&quot;</span>, <span class="s">&quot;rabbitmq-diagnostics&quot;</span>, <span class="s">&quot;-q&quot;</span>, <span class="s">&quot;ping&quot;</span>]
+      interval: 5s
+      timeout: 5s
+      retries: <span class="n">20</span>
+
+  messaging-service:
+    build: .
+    ports:
+      - <span class="s">&quot;8080:8080&quot;</span>
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      # EasyNetQ connection <span class="k">string</span> — the broker <span class="k">is</span> reachable by service name.
+      ConnectionStrings__RabbitMQ: <span class="s">&quot;host=rabbitmq&quot;</span></pre></div>
+<div class="pagebreak"></div>
+<h2>Task 5 — First feature &amp; testing</h2>
+<p>
+The “first feature” is channel membership. The tests cover the domain logic the
+REST API and shared model build on: role changes, the audit log, effective
+permissions, and the narrow DTO. <strong>8 tests pass</strong>
+(<code>dotnet test</code>).
+</p>
+<div class="code"><div class="code-head">tests/MessagingService.Tests/ChannelMemberTests.cs (excerpt)</div><pre>    [Fact]
+    <span class="k">public</span> <span class="k">void</span> ChangeRole_UpdatesRole_AndRecordsAuditEntry()
+    {
+        <span class="k">var</span> member = <span class="k">new</span> ChannelMember(_channelId, _userId, ChannelRole.Member);
+
+        member.ChangeRole(ChannelRole.Moderator, Guid.NewGuid());
+
+        Assert.Equal(ChannelRole.Moderator, member.Role);
+        <span class="k">var</span> entry = Assert.Single(member.RoleHistory);
+        Assert.Equal(ChannelRole.Member, entry.From);
+        Assert.Equal(ChannelRole.Moderator, entry.To);
+    }
+
+    [Fact]
+    <span class="k">public</span> <span class="k">void</span> ChangeRole_ToSameRole_IsNoop()
+    {
+        <span class="k">var</span> member = <span class="k">new</span> ChannelMember(_channelId, _userId, ChannelRole.Member);
+
+        member.ChangeRole(ChannelRole.Member, Guid.NewGuid());
+
+        Assert.Empty(member.RoleHistory);
+        Assert.Equal(ChannelRole.Member, member.Role);
+    }</pre></div>
+<div class="callout"><strong>Verification:</strong>
+<code>dotnet build</code> → 0 errors, 0 warnings ·
+<code>dotnet test</code> → 8 passed · service runs via
+<code>docker compose up</code> (RabbitMQ + messaging-service).</div>
+
+<div class="pagebreak"></div>
+<h2>The architecture at a glance</h2>
+<div class="diagram">
+
+<svg viewBox="0 0 720 430" width="100%" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .bx { fill:#eef2ff; stroke:#4f46e5; stroke-width:1.3; }
+    .bx-msg { fill:#e0f2fe; stroke:#0369a1; stroke-width:1.6; }
+    .lbl { font-family:Helvetica,Arial,sans-serif; font-size:12px; fill:#1e293b; text-anchor:middle; }
+    .lbl-b { font-weight:bold; }
+    .arr { stroke:#64748b; stroke-width:1.4; fill:none; marker-end:url(#ah); }
+    .arr-e { stroke:#0369a1; stroke-width:1.4; fill:none; marker-end:url(#ah); stroke-dasharray:4 3; }
+    .tag { font-family:Helvetica,Arial,sans-serif; font-size:9px; fill:#475569; text-anchor:middle; }
+  </style>
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <rect x="288" y="18" width="144" height="30" rx="6" class="bx"/><text x="360" y="37" class="lbl lbl-b">API Gateway</text>
+  <rect x="10" y="76" width="80" height="30" rx="6" class="bx"/><text x="50" y="95" class="lbl">Web</text>
+  <rect x="120" y="76" width="80" height="30" rx="6" class="bx"/><text x="160" y="95" class="lbl">Mobile</text>
+  <path d="M50,106 C50,126 300,108 318,54" class="arr"/>
+  <path d="M160,106 C160,126 320,108 336,54" class="arr"/>
+
+  <rect x="40" y="160" width="120" height="40" rx="6" class="bx"/><text x="100" y="184" class="lbl">Identity &amp; Access</text>
+  <rect x="190" y="160" width="120" height="40" rx="6" class="bx"/><text x="250" y="184" class="lbl">Organisation</text>
+  <rect x="300" y="160" width="120" height="40" rx="6" class="bx-msg"/><text x="360" y="184" class="lbl lbl-b">Messaging</text>
+  <rect x="430" y="160" width="110" height="40" rx="6" class="bx"/><text x="485" y="184" class="lbl">Presence</text>
+  <rect x="560" y="160" width="120" height="40" rx="6" class="bx"/><text x="620" y="184" class="lbl">Files &amp; Media</text>
+
+  <rect x="140" y="290" width="120" height="40" rx="6" class="bx"/><text x="200" y="314" class="lbl">Notifications</text>
+  <rect x="300" y="290" width="120" height="40" rx="6" class="bx"/><text x="360" y="314" class="lbl">Search</text>
+  <rect x="460" y="290" width="120" height="40" rx="6" class="bx"/><text x="520" y="314" class="lbl">Billing</text>
+
+  <path d="M360,18 C360,44 100,44 100,158" class="arr"/>
+  <path d="M360,18 C360,44 250,44 250,158" class="arr"/>
+  <path d="M360,18 C360,44 360,44 360,158" class="arr"/>
+  <path d="M360,18 C360,44 485,44 485,158" class="arr"/>
+  <path d="M360,18 C360,44 620,44 620,158" class="arr"/>
+
+  <path d="M360,200 C360,250 200,250 200,288" class="arr-e"/>
+  <text x="270" y="243" class="tag">event: message.created</text>
+  <path d="M360,200 C360,250 360,250 360,288" class="arr-e"/>
+  <text x="395" y="243" class="tag">event: message.created</text>
+
+  <text x="360" y="410" class="lbl" style="font-size:10px;fill:#64748b;">solid = REST (sync) · dashed = event (async, over RabbitMQ)</text>
+</svg>
+
+</div>
+<div class="callout"><strong>Sync vs async, once more:</strong> the gateway calls
+services over REST for request/response; Messaging fans a <code>message.created</code>
+event out to Notifications and Search so the sender is never blocked.</div>
+
+<div class="pagebreak"></div>
+<h2>Key takeaways</h2>
+<ul>
+  <li><strong>Bound by “one reason to change”</strong> — each service owns one bounded context and its data.</li>
+  <li><strong>Domain model ≠ shared model</strong> — entities stay rich internally; other services only see narrow DTOs.</li>
+  <li><strong>REST for answers, events for side-effects</strong> — persist + reply, then publish; never block the hot path.</li>
+  <li><strong>Abstractions over infrastructure</strong> — <code>IMessageClient</code> hides the broker; repositories hide storage.</li>
+  <li><strong>Ship it reproducibly</strong> — multi-stage Docker build + compose with healthchecks.</li>
+  <li><strong>Test the domain</strong> — 8 xUnit tests prove role changes, audit logging and permission resolution.</li>
+</ul>
+<div class="callout">Repo: <code>github.com/BenjaminDamC/bizcord</code> · service:
+<code>apps/messaging-microservice</code> · docs: <code>docs/architecture.md</code> +
+<code>docs/interactions.md</code></div>
+
+</body></html>
