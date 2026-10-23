@@ -1,0 +1,24 @@
+# Bizcord messaging microservice + RabbitMQ.
+# Task 4 — Deployment: Dockerfile + docker-compose.
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # management UI (guest/guest)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  messaging-service:
+    build: .
+    ports:
+      - "8080:8080"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      # EasyNetQ connection string — the broker is reachable by service name.
+      ConnectionStrings__RabbitMQ: "host=rabbitmq"
